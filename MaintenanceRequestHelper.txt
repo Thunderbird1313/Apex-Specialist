@@ -1,0 +1,55 @@
+public with sharing class MaintenanceRequestHelper {
+    //method is trigger from MaintenanceRequest trigger when there is new updates
+    public static void updateworkOrders(List<Case> updateWO, Map<Id,Case> nonupdateCase) {
+        Set<Id> validcaseIds = new Set<Id>();  
+        For (Case c : updateWO){
+	   //When an existing maintenance request of type Repair or Routine Maintenance is closed, create a new maintenance request for a future routine checkup.
+            if (nonupdateCase.get(c.Id).Status != 'Closed' && c.Status == 'Closed'){
+                if (c.Type == 'Repair' || c.Type == 'Routine Maintenance'){
+                    validcaseIds.add(c.Id);                   
+               }
+            }
+        }  
+        //new maintenance request is tied to the same Vehicle and Equipment Records as the original closed request
+	//all equipment has maintenance cycles.
+        if (!validcaseIds.isEmpty()){
+            List<Case> newlistCases = new List<Case>();
+            Map<Id,Case> closedCasesMap = new Map<Id,Case>([SELECT Id, Vehicle__c, Equipment__c, Equipment__r.Maintenance_Cycle__c,(SELECT Id,Equipment__c,Quantity__c FROM Equipment_Maintenance_Items__r) 
+                                                         FROM Case WHERE Id IN :validcaseIds]);
+            Map<Id,Decimal> caseMaintenance = new Map<ID,Decimal>();
+            AggregateResult[] results = [SELECT Maintenance_Request__c, MIN(Equipment__r.Maintenance_Cycle__c)cycle FROM Equipment_Maintenance_Item__c WHERE Maintenance_Request__c IN :ValidcaseIds GROUP BY Maintenance_Request__c];
+        
+        for (AggregateResult ar : results){ 
+            caseMaintenance.put((Id) ar.get('Maintenance_Request__c'), (Decimal) ar.get('cycle'));
+        }            
+            for(Case cc : closedCasesMap.values()){
+                Case newCase = new Case (
+                    ParentId = cc.Id,
+                    Status = 'New',
+                    Subject = 'Routine Maintenance',
+                    Type = 'Routine Maintenance',
+                    Vehicle__c = cc.Vehicle__c,
+                    Equipment__c =cc.Equipment__c,
+                    Origin = 'Web',
+                    Date_Reported__c = Date.Today()
+                    
+                );                
+                If (caseMaintenance.containskey(cc.Id)){
+                    newCase.Date_Due__c = Date.today().addDays((Integer) caseMaintenance.get(cc.Id));
+                }                
+                newlistCases.add(newCase);
+            }            
+           insert newlistCases;   
+          
+           List<Equipment_Maintenance_Item__c> clonedEMIs = new List<Equipment_Maintenance_Item__c>();
+           for (Case nc : newlistCases){
+                for (Equipment_Maintenance_Item__c emi : closedCasesMap.get(nc.ParentId).Equipment_Maintenance_Items__r){
+                    Equipment_Maintenance_Item__c emiClone = emi.clone();
+                    emiClone.Maintenance_Request__c = nc.Id;
+                    clonedEMIs.add(emiClone);                    
+                }
+            }
+            insert clonedEMIs;
+        }
+    }
+}
